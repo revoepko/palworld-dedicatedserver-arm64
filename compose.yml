@@ -71,6 +71,7 @@ services:
       WATCHDOG_WEBHOOK_URL: ${WATCHPAL_WEBHOOK_URL:-}
       WATCHDOG_TARGET_CONTAINER: ${PALWORLD_CONTAINER_NAME:-epko-palworld}
       WATCHDOG_CONTAINER: ${WATCHPAL_CONTAINER_NAME:-watchpal}
+      WATCHDOG_STATE_DIR: /var/lib/watchdog
       WATCHDOG_CHECK_INTERVAL_SECONDS: ${WATCHPAL_CHECK_INTERVAL_SECONDS:-10}
       WATCHDOG_STATUS_INTERVAL_SECONDS: ${WATCHPAL_STATUS_INTERVAL_SECONDS:-60}
       WATCHDOG_CONSECUTIVE_SAMPLES: ${WATCHPAL_CONSECUTIVE_SAMPLES:-3}
@@ -89,9 +90,13 @@ services:
     mem_limit: ${WATCHPAL_MEMORY_LIMIT:-256m}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - watchpal_state:/var/lib/watchdog
     secrets:
       - palworld_admin_password
 
 secrets:
   palworld_admin_password:
     file: ${PALWORLD_ADMIN_PASSWORD_FILE:-./secrets/palworld_admin_password}
+
+volumes:
+  watchpal_state:
