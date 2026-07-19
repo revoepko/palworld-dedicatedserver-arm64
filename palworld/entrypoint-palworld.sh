@@ -71,6 +71,57 @@ if [[ -n "$joined_library_paths" ]]; then
     export BOX64_LD_LIBRARY_PATH="${joined_library_paths}${BOX64_LD_LIBRARY_PATH:+:${BOX64_LD_LIBRARY_PATH}}"
 fi
 
+pal_clock_mode="${PAL_CLOCK_MODE:-}"
+if [[ -z "$pal_clock_mode" ]]; then
+    if [[ "${PAL_CLOCK_ENABLED:-1}" == "1" ]]; then
+        pal_clock_mode="preload"
+    else
+        pal_clock_mode="off"
+    fi
+fi
+
+case "$pal_clock_mode" in
+preload|box64|off)
+    ;;
+*)
+    echo "[epko-palworld] 잘못된 PAL_CLOCK_MODE입니다: $pal_clock_mode (preload, box64, off)" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$pal_clock_mode" != "off" ]]; then
+    read -r -a ntp_servers <<< "${PAL_CLOCK_NTP_SERVERS:-time.cloudflare.com time.google.com pool.ntp.org}"
+    if clock_anchor="$(pal-clock-anchor "${ntp_servers[@]}")"; then
+        read -r PAL_CLOCK_ANCHOR_EPOCH_NS PAL_CLOCK_ANCHOR_MONOTONIC_NS <<< "$clock_anchor"
+        export PAL_CLOCK_ANCHOR_EPOCH_NS PAL_CLOCK_ANCHOR_MONOTONIC_NS
+        echo "[epko-palworld] Pal clock 기준시각: 외부 NTP (${#ntp_servers[@]}개 서버 조회)"
+    elif [[ "${PAL_CLOCK_NTP_REQUIRED:-0}" == "1" ]]; then
+        echo "[epko-palworld] 외부 NTP 기준시각을 가져오지 못해 기동을 중단합니다." >&2
+        exit 1
+    else
+        clock_anchor="$(pal-clock-anchor --system)"
+        read -r PAL_CLOCK_ANCHOR_EPOCH_NS PAL_CLOCK_ANCHOR_MONOTONIC_NS <<< "$clock_anchor"
+        export PAL_CLOCK_ANCHOR_EPOCH_NS PAL_CLOCK_ANCHOR_MONOTONIC_NS
+        echo "[epko-palworld] 경고: NTP 조회 실패, 시작 시 시스템 시각을 1회 기준값으로 사용합니다." >&2
+    fi
+
+    if [[ "$pal_clock_mode" == "preload" ]]; then
+        pal_clock_library="/usr/local/lib/pal-clock/libpal-clock.so"
+        export BOX64_PAL_CLOCK=0
+        export BOX64_LD_PRELOAD="${pal_clock_library}${BOX64_LD_PRELOAD:+:${BOX64_LD_PRELOAD}}"
+        echo "[epko-palworld] Pal clock 모드: preload"
+    else
+        if [[ "${BOX64_LD_PRELOAD:-}" == *libpal-clock.so* ]]; then
+            echo "[epko-palworld] box64 모드와 libpal-clock.so preload를 동시에 사용할 수 없습니다." >&2
+            exit 1
+        fi
+        export BOX64_PAL_CLOCK=1
+        echo "[epko-palworld] Pal clock 모드: Box64 내부 공통 시계"
+    fi
+else
+    export BOX64_PAL_CLOCK=0
+fi
+
 echo "[epko-palworld] Box64: $(box64 -v 2>&1 | head -n 1)"
 echo "[epko-palworld] 실행 파일: $server_binary"
 

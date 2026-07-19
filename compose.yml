@@ -2,11 +2,13 @@ name: palworld-stack
 
 services:
   base:
-    image: epko-base:latest
+    image: ${BOX64_BASE_IMAGE:-epko-base:latest}
     platform: linux/arm64
     build:
       context: ./base
       dockerfile: Dockerfile
+      args:
+        BOX64_COMMIT: ${BOX64_COMMIT:-7eeb5016493dab4e143d53da50dd47bfb44a9509}
     command: ["true"]
     restart: "no"
     profiles: ["build-only"]
@@ -23,12 +25,14 @@ services:
     profiles: ["maintenance"]
 
   palworld:
-    image: epko-palworld:latest
+    image: ${PALWORLD_IMAGE:-epko-palworld:latest}
     platform: linux/arm64
     container_name: ${PALWORLD_CONTAINER_NAME:-epko-palworld}
     build:
       context: ./palworld
       dockerfile: Dockerfile
+      args:
+        BOX64_BASE_IMAGE: ${BOX64_BASE_IMAGE:-epko-base:latest}
     init: true
     restart: unless-stopped
     stop_grace_period: 120s
@@ -49,6 +53,10 @@ services:
       BOX64_DYNAREC_FASTNAN: ${BOX64_DYNAREC_FASTNAN:-0}
       BOX64_DYNAREC_X87DOUBLE: ${BOX64_DYNAREC_X87DOUBLE:-1}
       BOX64_SYNC_ROUNDING: ${BOX64_SYNC_ROUNDING:-1}
+      BOX64_RDTSC_1GHZ: ${BOX64_RDTSC_1GHZ:-1}
+      PAL_CLOCK_MODE: ${PAL_CLOCK_MODE:-box64}
+      PAL_CLOCK_NTP_REQUIRED: ${PAL_CLOCK_NTP_REQUIRED:-0}
+      PAL_CLOCK_NTP_SERVERS: ${PAL_CLOCK_NTP_SERVERS:-time.cloudflare.com time.google.com pool.ntp.org}
     ports:
       - "${PALWORLD_PORT:-8211}:${PALWORLD_PORT:-8211}/udp"
     volumes:
@@ -57,7 +65,7 @@ services:
       - palworld_admin_password
 
   watchpal:
-    image: epko-watchdog:latest
+    image: ${WATCHDOG_IMAGE:-epko-watchdog:latest}
     platform: linux/arm64
     container_name: ${WATCHPAL_CONTAINER_NAME:-watchpal}
     build:

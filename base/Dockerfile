@@ -6,11 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Stage 2: Box64 빌드
 FROM debian:bookworm-slim AS builder
-ARG BOX64_COMMIT=24065fffb
+ARG BOX64_COMMIT=7eeb5016493dab4e143d53da50dd47bfb44a9509
 RUN apt-get update && apt-get install -y git build-essential cmake python3
+COPY patches/box64-pal-clock.patch /tmp/box64-pal-clock.patch
 WORKDIR /src
 RUN git clone https://github.com/ptitSeb/box64.git \
-    && git -C /src/box64 checkout "$BOX64_COMMIT"
+    && git -C /src/box64 checkout "$BOX64_COMMIT" \
+    && git -C /src/box64 apply --check /tmp/box64-pal-clock.patch \
+    && git -C /src/box64 apply /tmp/box64-pal-clock.patch
 WORKDIR /src/box64/build
 RUN cmake .. -DARM_DYNAREC=ON -DBOX32=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     && make -j$(nproc) \

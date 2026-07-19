@@ -1,7 +1,24 @@
 # syntax=docker/dockerfile:1
 
 # 기존 Core Keeper용 epko-base에서 직접 빌드한 Box64 산출물을 재사용한다.
-FROM epko-base:latest AS box64-base
+ARG BOX64_BASE_IMAGE=epko-base:latest
+FROM ${BOX64_BASE_IMAGE} AS box64-base
+
+FROM debian:trixie-slim AS clock-builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        gcc-x86-64-linux-gnu \
+        libc6-dev \
+        libc6-dev-amd64-cross \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY pal-clock.c pal-clock-anchor.c pal-clock-probe.c ./
+RUN gcc -O2 -Wall -Wextra -Werror -o pal-clock-anchor pal-clock-anchor.c \
+    && x86_64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -fPIC -shared \
+        -o libpal-clock.so pal-clock.c \
+    && x86_64-linux-gnu-gcc -O2 -Wall -Wextra -Werror \
+        -o pal-clock-probe pal-clock-probe.c
 
 # Palworld 1.0의 SDL3 런타임을 위해 Debian trixie를 사용한다.
 FROM debian:trixie-slim
@@ -17,6 +34,9 @@ ENV USER=steam \
     BOX64_DYNAREC_FASTNAN=0 \
     BOX64_DYNAREC_X87DOUBLE=1 \
     BOX64_SYNC_ROUNDING=1 \
+    BOX64_RDTSC_1GHZ=1 \
+    PAL_CLOCK_MODE=box64 \
+    PAL_CLOCK_NTP_SERVERS="time.cloudflare.com time.google.com pool.ntp.org" \
     BOX64_LOG=0
 
 RUN apt-get update \
@@ -39,6 +59,10 @@ RUN apt-get update \
 COPY --from=box64-base /usr/local/bin/box64 /usr/local/bin/box64
 COPY --from=box64-base /usr/lib/box64-x86_64-linux-gnu /usr/lib/box64-x86_64-linux-gnu
 COPY --from=box64-base /etc/box64.box64rc /etc/box64.box64rc
+
+COPY --from=clock-builder /src/pal-clock-anchor /usr/local/bin/pal-clock-anchor
+COPY --from=clock-builder /src/libpal-clock.so /usr/local/lib/pal-clock/libpal-clock.so
+COPY --from=clock-builder /src/pal-clock-probe /usr/local/lib/pal-clock/pal-clock-probe
 
 COPY entrypoint-palworld.sh /usr/local/bin/entrypoint-palworld.sh
 RUN chmod 755 /usr/local/bin/entrypoint-palworld.sh
