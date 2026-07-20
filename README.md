@@ -57,11 +57,9 @@ make logs
 | 명령 | 설명 |
 |---|---|
 | `make up-palworld` | Palworld 서버만 시작 |
-| `make up` | Palworld와 Watchpal 시작 |
 | `make restart` | Palworld 서버 재시작 |
 | `make status` | 컨테이너 상태 확인 |
 | `make logs` | Palworld 로그 확인 |
-| `make logs-watchpal` | Watchpal 로그 확인 |
 | `make down` | 컨테이너와 Compose 네트워크 종료 |
 
 ## 데이터와 서버 설정
@@ -100,17 +98,6 @@ NTP 서버에 연결하지 못하면 기본값인 `PAL_CLOCK_NTP_REQUIRED=0`에 
 시점의 시스템 시각을 기준으로 계속 실행합니다. NTP 연결 실패 시 서버를
 시작하지 않으려면 이 값을 `1`로 바꿉니다.
 
-## Watchpal 선택 사용
-
-Watchpal은 메모리를 감시하고, 주기적으로 월드를 저장하며, 필요할 때 접속자에게
-알린 뒤 서버를 안전하게 재시작합니다. Discord Webhook을 통한 상태 알림도
-지원합니다.
-
-Watchpal 소스는 이 저장소에 포함되지 않습니다. 기본 빌드 경로는
-`../watchdog/container`이며, 다른 위치를 사용한다면 `.env`의
-`WATCHDOG_BUILD_CONTEXT`를 변경합니다. Watchpal이 필요하지 않으면 계속
-`make up-palworld`를 사용하면 됩니다.
-
 ## 업데이트와 롤백
 
 Palworld 또는 Box64를 업데이트하기 전에는 월드를 저장하고 접속자에게 종료를
@@ -127,9 +114,11 @@ Palworld 또는 Box64를 업데이트하기 전에는 월드를 저장하고 접
 - Apple Silicon에서 ARM64 이미지 빌드와 PalServer 실행
 - 실제 게임 클라이언트 접속과 다인 플레이
 - `8211/udp` 접속과 REST API의 저장·공지·종료 호출
-- 시간 함수와 syscall 경로의 시간 역행 방지
+- 약 502만 회의 시간 함수 호출과 약 377만 회의 delta 비교에서 음수 delta 0건
+- 0 delta 354건을 허용한 상태에서 시간 함수와 syscall 경로 테스트 통과
+- v3 운영 이미지를 접속자 없이 20분 55초 관찰해 41개 표본 모두 `healthy`,
+  재시작·OOM·delta 관련 오류 0건 확인
 - 컨테이너 재시작 후 호스트에 저장한 월드 복원
-- Watchpal의 주기 저장, 상태 알림과 사전 안내 후 재시작
 
 장시간 운영, Palworld 업데이트 직후의 호환성, 다른 ARM64 CPU에서의 성능과
-안정성은 각 환경에서 별도로 확인해야 합니다.
+안정성, 실제 플레이 부하에서의 v3 동작은 각 환경에서 별도로 확인해야 합니다.
