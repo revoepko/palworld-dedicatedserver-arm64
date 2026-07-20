@@ -73,6 +73,25 @@ struct thread_probe_context {
     struct thread_probe_result *result;
 };
 
+struct handoff_probe_shared {
+    pthread_mutex_t mutex;
+    pthread_cond_t condition;
+    long next_thread;
+    long thread_count;
+    long rounds;
+    long sample_count;
+    int has_previous;
+    int64_t previous_ns;
+    long negative_count;
+    long zero_count;
+    int error_number;
+};
+
+struct handoff_probe_context {
+    long thread_index;
+    struct handoff_probe_shared *shared;
+};
+
 static long probe_value(const char *name, long default_value, long maximum)
 {
     const char *value = getenv(name);
@@ -97,6 +116,18 @@ static void count_delta(int64_t current, int64_t previous, long *negative, long 
         (*negative)++;
     } else if (current == previous) {
         (*zero)++;
+    }
+}
+
+static int read_realtime_path(long path, struct timespec *value)
+{
+    switch (path % 3) {
+    case 0:
+        return clock_gettime(CLOCK_REALTIME, value);
+    case 1:
+        return (int)syscall(SYS_clock_gettime, CLOCK_REALTIME, value);
+    default:
+        return raw_clock_gettime(CLOCK_REALTIME, value);
     }
 }
 
@@ -128,6 +159,53 @@ static void *thread_probe(void *argument)
     return NULL;
 }
 
+static void *handoff_probe(void *argument)
+{
+    struct handoff_probe_context *context = argument;
+    struct handoff_probe_shared *shared = context->shared;
+    struct timespec current;
+    long round;
+    int wait_error;
+
+    for (round = 0; round < shared->rounds; round++) {
+        wait_error = pthread_mutex_lock(&shared->mutex);
+        if (wait_error != 0) {
+            shared->error_number = wait_error;
+            return NULL;
+        }
+        while (shared->next_thread != context->thread_index
+            && shared->error_number == 0) {
+            wait_error = pthread_cond_wait(&shared->condition, &shared->mutex);
+            if (wait_error != 0) {
+                shared->error_number = wait_error;
+                break;
+            }
+        }
+        if (shared->error_number != 0) {
+            (void)pthread_cond_broadcast(&shared->condition);
+            (void)pthread_mutex_unlock(&shared->mutex);
+            return NULL;
+        }
+        if (read_realtime_path(shared->sample_count, &current) != 0) {
+            shared->error_number = errno != 0 ? errno : EIO;
+            (void)pthread_cond_broadcast(&shared->condition);
+            (void)pthread_mutex_unlock(&shared->mutex);
+            return NULL;
+        }
+        if (shared->has_previous) {
+            count_delta(timespec_to_ns(&current), shared->previous_ns,
+                &shared->negative_count, &shared->zero_count);
+        }
+        shared->previous_ns = timespec_to_ns(&current);
+        shared->has_previous = 1;
+        shared->sample_count++;
+        shared->next_thread = (shared->next_thread + 1) % shared->thread_count;
+        (void)pthread_cond_broadcast(&shared->condition);
+        (void)pthread_mutex_unlock(&shared->mutex);
+    }
+    return NULL;
+}
+
 int main(void)
 {
     struct timespec realtime_first;
@@ -145,20 +223,31 @@ int main(void)
     long thread_count = probe_value("PAL_CLOCK_PROBE_THREADS", 4, 64);
     long thread_iterations = probe_value(
         "PAL_CLOCK_PROBE_THREAD_ITERATIONS", iterations, 10000000);
+    long handoff_rounds = probe_value("PAL_CLOCK_PROBE_HANDOFF_ROUNDS", 1000, 100000);
     long negative_count = 0;
     long zero_count = 0;
     long thread_negative_count = 0;
     long thread_zero_count = 0;
+    long coarse_negative_count = 0;
+    long coarse_zero_count = 0;
     long i;
     int thread_error;
     pthread_t *threads;
     struct thread_probe_context *thread_contexts;
     struct thread_probe_result *thread_results;
+    pthread_t *handoff_threads;
+    struct handoff_probe_context *handoff_contexts;
+    struct handoff_probe_shared handoff_shared = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .condition = PTHREAD_COND_INITIALIZER,
+    };
     int64_t libc_to_syscall_delta_ns;
     int64_t syscall_to_instruction_delta_ns;
     int64_t instruction_to_libc_delta_ns;
     int strict = getenv("PAL_CLOCK_PROBE_STRICT") != NULL
         && strcmp(getenv("PAL_CLOCK_PROBE_STRICT"), "0") != 0;
+    int require_zero = getenv("PAL_CLOCK_PROBE_REQUIRE_ZERO") != NULL
+        && strcmp(getenv("PAL_CLOCK_PROBE_REQUIRE_ZERO"), "0") != 0;
 
     if (clock_gettime(CLOCK_REALTIME, &realtime_first) != 0
         || clock_gettime(CLOCK_MONOTONIC_RAW, &monotonic) != 0
@@ -186,6 +275,21 @@ int main(void)
     if (instruction_seconds == (time_t)-1) {
         perror("instruction time probe");
         return 1;
+    }
+    count_delta((int64_t)direct_seconds, (int64_t)seconds,
+        &coarse_negative_count, &coarse_zero_count);
+    count_delta((int64_t)instruction_seconds, (int64_t)direct_seconds,
+        &coarse_negative_count, &coarse_zero_count);
+    for (i = 0; i < 1000 && coarse_zero_count == 0; i++) {
+        time_t coarse_first = time(NULL);
+        time_t coarse_second = time(NULL);
+
+        if (coarse_first == (time_t)-1 || coarse_second == (time_t)-1) {
+            perror("zero delta probe");
+            return 1;
+        }
+        count_delta((int64_t)coarse_second, (int64_t)coarse_first,
+            &coarse_negative_count, &coarse_zero_count);
     }
     usleep(50000);
     if (clock_gettime(CLOCK_REALTIME, &realtime_second) != 0) {
@@ -279,6 +383,45 @@ int main(void)
     free(thread_contexts);
     free(thread_results);
 
+    handoff_threads = calloc((size_t)thread_count, sizeof(*handoff_threads));
+    handoff_contexts = calloc((size_t)thread_count, sizeof(*handoff_contexts));
+    if (handoff_threads == NULL || handoff_contexts == NULL) {
+        fprintf(stderr, "failed to allocate handoff probe state\n");
+        free(handoff_threads);
+        free(handoff_contexts);
+        return 1;
+    }
+    handoff_shared.thread_count = thread_count;
+    handoff_shared.rounds = handoff_rounds;
+    for (i = 0; i < thread_count; i++) {
+        handoff_contexts[i].thread_index = i;
+        handoff_contexts[i].shared = &handoff_shared;
+        thread_error = pthread_create(
+            &handoff_threads[i], NULL, handoff_probe, &handoff_contexts[i]);
+        if (thread_error != 0) {
+            errno = thread_error;
+            perror("handoff pthread_create");
+            return 1;
+        }
+    }
+    for (i = 0; i < thread_count; i++) {
+        thread_error = pthread_join(handoff_threads[i], NULL);
+        if (thread_error != 0) {
+            errno = thread_error;
+            perror("handoff pthread_join");
+            return 1;
+        }
+    }
+    free(handoff_threads);
+    free(handoff_contexts);
+    (void)pthread_cond_destroy(&handoff_shared.condition);
+    (void)pthread_mutex_destroy(&handoff_shared.mutex);
+    if (handoff_shared.error_number != 0) {
+        errno = handoff_shared.error_number;
+        perror("handoff clock probe");
+        return 1;
+    }
+
     printf("virtual_realtime_ns=%lld\n", (long long)timespec_to_ns(&realtime_first));
     printf("virtual_delta_ns=%lld\n",
         (long long)(timespec_to_ns(&realtime_second) - timespec_to_ns(&realtime_first)));
@@ -297,6 +440,12 @@ int main(void)
     printf("thread_iterations=%ld\n", thread_iterations);
     printf("thread_negative_count=%ld\n", thread_negative_count);
     printf("thread_zero_count=%ld\n", thread_zero_count);
+    printf("handoff_samples=%ld\n", handoff_shared.sample_count);
+    printf("handoff_negative_count=%ld\n", handoff_shared.negative_count);
+    printf("handoff_zero_count=%ld\n", handoff_shared.zero_count);
+    printf("coarse_negative_count=%ld\n", coarse_negative_count);
+    printf("coarse_zero_count=%ld\n", coarse_zero_count);
+    printf("zero_delta_policy=allowed\n");
     printf("monotonic_raw_ns=%lld\n", (long long)timespec_to_ns(&monotonic));
     printf("gettimeofday_seconds=%lld\n", (long long)wall.tv_sec);
     printf("direct_gettimeofday_seconds=%lld\n", (long long)direct_wall.tv_sec);
@@ -306,13 +455,17 @@ int main(void)
     printf("direct_time_seconds=%lld\n", (long long)direct_seconds);
     printf("instruction_time_seconds=%lld\n", (long long)instruction_seconds);
 
-    if (strict && (negative_count != 0 || zero_count != 0
-            || thread_negative_count != 0 || thread_zero_count != 0)) {
+    if (strict && (negative_count != 0 || thread_negative_count != 0
+            || handoff_shared.negative_count != 0 || coarse_negative_count != 0)) {
         fprintf(stderr,
-            "clock was non-increasing: mixed_negative=%ld mixed_zero=%ld "
-            "thread_negative=%ld thread_zero=%ld\n",
-            negative_count, zero_count, thread_negative_count, thread_zero_count);
+            "clock moved backwards: mixed=%ld thread=%ld handoff=%ld coarse=%ld\n",
+            negative_count, thread_negative_count,
+            handoff_shared.negative_count, coarse_negative_count);
         return 3;
+    }
+    if (require_zero && coarse_zero_count == 0) {
+        fprintf(stderr, "zero delta case was not observed\n");
+        return 4;
     }
     return 0;
 }

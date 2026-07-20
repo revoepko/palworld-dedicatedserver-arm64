@@ -12,7 +12,6 @@
 #define NS_PER_SECOND 1000000000LL
 
 static _Atomic int initialized = 0;
-static _Thread_local int64_t thread_last_realtime_ns = 0;
 static _Atomic unsigned int trace_mask = 0;
 static int64_t anchor_epoch_ns = 0;
 static int64_t anchor_monotonic_ns = 0;
@@ -117,32 +116,34 @@ static void initialize_clock(void)
         PAL_CLOCK_LOG_LITERAL("[pal-clock] warning: external anchor missing; process-start system time used\n");
     }
 
-    thread_last_realtime_ns = 0;
     atomic_store_explicit(&initialized, 1, memory_order_release);
 }
 
-static int64_t virtual_realtime_ns(void)
+static int virtual_realtime_ns(int64_t *result)
 {
     struct timespec monotonic;
-    int64_t candidate;
-    int64_t previous;
+    int64_t current_monotonic_ns;
+    int64_t elapsed_ns;
 
     initialize_clock();
     if (raw_clock_gettime(CLOCK_MONOTONIC_RAW, &monotonic) != 0) {
-        previous = thread_last_realtime_ns;
-        candidate = previous > 0 ? previous + 1 : anchor_epoch_ns;
-        thread_last_realtime_ns = candidate;
-        return candidate;
+        return -1;
     }
 
-    candidate = anchor_epoch_ns + timespec_to_ns(&monotonic) - anchor_monotonic_ns;
-    previous = thread_last_realtime_ns;
-    if (candidate <= previous) {
-        candidate = previous + 1;
+    current_monotonic_ns = timespec_to_ns(&monotonic);
+    if (current_monotonic_ns < anchor_monotonic_ns) {
+        errno = ERANGE;
+        return -1;
     }
 
-    thread_last_realtime_ns = candidate;
-    return candidate;
+    elapsed_ns = current_monotonic_ns - anchor_monotonic_ns;
+    if (anchor_epoch_ns > INT64_MAX - elapsed_ns) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    *result = anchor_epoch_ns + elapsed_ns;
+    return 0;
 }
 
 static void trace_once(unsigned int bit, const char *message, size_t length)
@@ -160,6 +161,7 @@ int clock_gettime(clockid_t clock_id, struct timespec *value)
         "[pal-clock] intercepted clock_gettime(CLOCK_REALTIME)\n";
     static const char monotonic_message[] =
         "[pal-clock] observed clock_gettime(monotonic family)\n";
+    int64_t virtual_ns;
 
     if (clock_id == CLOCK_REALTIME
 #ifdef CLOCK_REALTIME_COARSE
@@ -167,7 +169,10 @@ int clock_gettime(clockid_t clock_id, struct timespec *value)
 #endif
     ) {
         trace_once(1U, realtime_message, sizeof(realtime_message) - 1);
-        ns_to_timespec(virtual_realtime_ns(), value);
+        if (virtual_realtime_ns(&virtual_ns) != 0) {
+            return -1;
+        }
+        ns_to_timespec(virtual_ns, value);
         return 0;
     }
 
@@ -204,7 +209,9 @@ int gettimeofday(struct timeval *value, void *timezone_value)
     }
 
     trace_once(4U, message, sizeof(message) - 1);
-    virtual_ns = virtual_realtime_ns();
+    if (virtual_realtime_ns(&virtual_ns) != 0) {
+        return -1;
+    }
     value->tv_sec = (time_t)(virtual_ns / NS_PER_SECOND);
     value->tv_usec = (suseconds_t)((virtual_ns % NS_PER_SECOND) / 1000);
     return 0;
@@ -218,10 +225,14 @@ int __gettimeofday(struct timeval *value, void *timezone_value)
 time_t time(time_t *result)
 {
     static const char message[] = "[pal-clock] intercepted time()\n";
+    int64_t virtual_ns;
     time_t value;
 
     trace_once(8U, message, sizeof(message) - 1);
-    value = (time_t)(virtual_realtime_ns() / NS_PER_SECOND);
+    if (virtual_realtime_ns(&virtual_ns) != 0) {
+        return (time_t)-1;
+    }
+    value = (time_t)(virtual_ns / NS_PER_SECOND);
     if (result != NULL) {
         *result = value;
     }
