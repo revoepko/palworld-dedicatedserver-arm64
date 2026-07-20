@@ -91,9 +91,10 @@ Apple Silicon의 Docker Desktop에서는 PalServer가 `Detected negative delta t
 Box64 커밋과 안정성 설정을 `.env.sample`에 고정해 둡니다.
 
 기본값인 `PAL_CLOCK_MODE=box64`는 NTP 기준 시각과 단조 시계를 조합해 PalServer에
-전달되는 시간이 뒤로 가지 않도록 보정합니다. `BOX64_RDTSC_1GHZ=1`은 RDTSC를
-1GHz 기준으로 처리합니다. 특별히 문제를 분석하는 경우가 아니라면 관련 값을
-임의로 바꾸지 않는 편이 안전합니다.
+전달되는 시간이 뒤로 가지 않도록 보정합니다. 각 스레드는
+`CLOCK_MONOTONIC_RAW`의 경과 시간을 사용하므로 Docker VM의 실시간 시계가
+조정되더라도 게임 서버의 시간은 영향을 받지 않습니다. 특별히 문제를 분석하는
+경우가 아니라면 관련 값을 임의로 바꾸지 않는 편이 안전합니다.
 
 NTP 서버에 연결하지 못하면 기본값인 `PAL_CLOCK_NTP_REQUIRED=0`에 따라 시작
 시점의 시스템 시각을 기준으로 계속 실행합니다. NTP 연결 실패 시 서버를

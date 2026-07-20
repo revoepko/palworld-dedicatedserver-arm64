@@ -12,7 +12,7 @@
 #define NS_PER_SECOND 1000000000LL
 
 static _Atomic int initialized = 0;
-static _Atomic int64_t last_realtime_ns = 0;
+static _Thread_local int64_t thread_last_realtime_ns = 0;
 static _Atomic unsigned int trace_mask = 0;
 static int64_t anchor_epoch_ns = 0;
 static int64_t anchor_monotonic_ns = 0;
@@ -117,7 +117,7 @@ static void initialize_clock(void)
         PAL_CLOCK_LOG_LITERAL("[pal-clock] warning: external anchor missing; process-start system time used\n");
     }
 
-    atomic_store_explicit(&last_realtime_ns, anchor_epoch_ns, memory_order_relaxed);
+    thread_last_realtime_ns = 0;
     atomic_store_explicit(&initialized, 1, memory_order_release);
 }
 
@@ -129,24 +129,20 @@ static int64_t virtual_realtime_ns(void)
 
     initialize_clock();
     if (raw_clock_gettime(CLOCK_MONOTONIC_RAW, &monotonic) != 0) {
-        return atomic_load_explicit(&last_realtime_ns, memory_order_acquire);
+        previous = thread_last_realtime_ns;
+        candidate = previous > 0 ? previous + 1 : anchor_epoch_ns;
+        thread_last_realtime_ns = candidate;
+        return candidate;
     }
 
     candidate = anchor_epoch_ns + timespec_to_ns(&monotonic) - anchor_monotonic_ns;
-    previous = atomic_load_explicit(&last_realtime_ns, memory_order_acquire);
-
-    while (candidate > previous) {
-        if (atomic_compare_exchange_weak_explicit(
-                &last_realtime_ns,
-                &previous,
-                candidate,
-                memory_order_release,
-                memory_order_acquire)) {
-            return candidate;
-        }
+    previous = thread_last_realtime_ns;
+    if (candidate <= previous) {
+        candidate = previous + 1;
     }
 
-    return previous;
+    thread_last_realtime_ns = candidate;
+    return candidate;
 }
 
 static void trace_once(unsigned int bit, const char *message, size_t length)

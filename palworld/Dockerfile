@@ -17,7 +17,7 @@ COPY pal-clock.c pal-clock-anchor.c pal-clock-probe.c ./
 RUN gcc -O2 -Wall -Wextra -Werror -o pal-clock-anchor pal-clock-anchor.c \
     && x86_64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -fPIC -shared \
         -o libpal-clock.so pal-clock.c \
-    && x86_64-linux-gnu-gcc -O2 -Wall -Wextra -Werror \
+    && x86_64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -pthread \
         -o pal-clock-probe pal-clock-probe.c
 
 # Palworld 1.0의 SDL3 런타임을 위해 Debian trixie를 사용한다.
@@ -34,7 +34,6 @@ ENV USER=steam \
     BOX64_DYNAREC_FASTNAN=0 \
     BOX64_DYNAREC_X87DOUBLE=1 \
     BOX64_SYNC_ROUNDING=1 \
-    BOX64_RDTSC_1GHZ=1 \
     PAL_CLOCK_MODE=box64 \
     PAL_CLOCK_NTP_SERVERS="time.cloudflare.com time.google.com pool.ntp.org" \
     BOX64_LOG=0
