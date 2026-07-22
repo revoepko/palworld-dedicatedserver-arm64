@@ -1,13 +1,13 @@
 COMPOSE := docker compose -f compose.yml
 
-.PHONY: build-base build-services build install up up-palworld up-watchpal down \
-	restart logs logs-watchpal status config
+.PHONY: build-base build-services build install up up-palworld down \
+	restart logs status config
 
 build-base:
 	$(COMPOSE) --profile build-only build base
 
 build-services:
-	$(COMPOSE) --profile maintenance build palworld installer watchpal
+	$(COMPOSE) --profile maintenance build palworld installer
 
 build: build-base build-services
 
@@ -21,13 +21,10 @@ install:
 		/data/palworld/PalServer.sh
 
 up:
-	$(COMPOSE) up -d palworld watchpal
+	$(COMPOSE) up -d palworld
 
 up-palworld:
 	$(COMPOSE) up -d palworld
-
-up-watchpal:
-	$(COMPOSE) up -d watchpal
 
 down:
 	$(COMPOSE) --profile maintenance down
@@ -37,9 +34,6 @@ restart:
 
 logs:
 	$(COMPOSE) logs -f palworld
-
-logs-watchpal:
-	$(COMPOSE) logs -f watchpal
 
 status:
 	$(COMPOSE) --profile maintenance ps

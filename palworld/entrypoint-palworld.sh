@@ -74,19 +74,6 @@ fi
 
 # DepotDownloader와 macOS bind mount 조합에서는 실행 비트가 보존되지 않을 수 있다.
 chmod +x "$server_binary"
-mkdir -p "${palworld_dir}/Pal/Saved/Logs"
-pal_log_file="${palworld_dir}/Pal/Saved/Logs/Pal.log"
-pal_log_max_bytes="${PALWORLD_LOG_MAX_BYTES:-67108864}"
-if [[ ! "$pal_log_max_bytes" =~ ^[0-9]+$ ]] || (( pal_log_max_bytes < 1048576 )); then
-    echo "[epko-palworld] PALWORLD_LOG_MAX_BYTES는 1048576 이상의 정수여야 합니다." >&2
-    exit 1
-fi
-if [[ -f "$pal_log_file" ]] && (( $(wc -c < "$pal_log_file") >= pal_log_max_bytes )); then
-    mv -f "$pal_log_file" "${pal_log_file}.previous"
-fi
-# Shipping 빌드가 -log/-abslog만으로 Pal.log를 만들지 않는 경우에도 Crashpad 첨부와
-# Watchpal 진단에 쓸 수 있도록 stdout/stderr를 같은 파일에 복제한다.
-exec > >(tee -a "$pal_log_file") 2>&1
 if [[ -f "${palworld_dir}/Pal/Plugins/Sentry/Binaries/Linux/crashpad_handler" ]]; then
     chmod +x "${palworld_dir}/Pal/Plugins/Sentry/Binaries/Linux/crashpad_handler"
 fi

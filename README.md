@@ -30,11 +30,6 @@ cp .env.sample .env
 영문, 숫자, `_`, `-`를 사용해 16~64자로 작성합니다. `.env`와 비밀번호 파일은
 Git에 포함되지 않습니다.
 
-Discord Webhook을 사용할 때는 URL을 `.env`에 직접 넣는 방식보다
-`secrets/watchpal_webhook_url` 같은 파일을 만들고
-`WATCHPAL_WEBHOOK_SECRET_FILE`로 지정하는 방식을 권장합니다. 그러면 Webhook
-URL이 컨테이너 환경 변수에 노출되지 않습니다.
-
 ### 2. 이미지 빌드와 서버 설치
 
 ```bash
@@ -85,29 +80,21 @@ ${PALWORLD_DATA_ROOT}/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini
 - `RESTAPIEnabled=True`
 - `RESTAPIPort=8212`
 
-REST API 포트는 호스트에 공개되지 않으며 Compose 내부에서만 사용합니다.
+REST API 포트는 호스트에 공개되지 않으며 외부 공유 제어 네트워크에서만
+`palworld-api` 별칭으로 접근할 수 있습니다. 기본 네트워크 이름은
+`epko-palworld-control`이며 서버 기동 전에 생성되어 있어야 합니다.
 RCON은 보안상 기본값인 `PALWORLD_RCON_ENABLED=0`으로 명시적으로 비활성화하며,
 호스트 포트에도 게시하지 않습니다.
 
-## 빠른 장애 복구와 진단
+## 로그와 충돌 진단 기본값
 
-Watchpal은 Docker 프로세스 검사와 별도로 내부 REST `metrics`를 확인합니다.
-기본 REST 제한 시간은 5초이고 2회 연속 실패 시 장애 상태로 표시하며 3회 연속
-실패 시 같은 Palworld 컨테이너를 재기동합니다. 응답하지 않는 프로세스에 대한
-Docker 종료 유예는 5초입니다. 반면 메모리 보호·수동 점검처럼 REST가 정상인
-재기동에서는 기존처럼 저장 후 접속자에게 30초 전에 안내합니다.
+PalServer의 stdout/stderr는 별도 `tee` 프로세스나 `copytruncate` 없이 Docker
+데몬의 내장 `local` 로그 드라이버가 받습니다. Palworld 로그는 기본 8MiB 파일
+2개로 순환하고 압축을 끄며, 4MiB 비차단 버퍼를 사용합니다. 따라서 로그 저장이
+PalServer의 stdout을 막지 않고 Docker 로그 사용량도 제한됩니다. 버퍼가 가득 찰
+정도의 비정상적인 로그 폭주에서는 오래된 로그 일부가 누락될 수 있습니다.
 
-이 구성은 UDP 라우터나 블루/그린 서버를 사용하지 않습니다. 같은 월드와 같은
-게임 포트를 사용하는 컨테이너 하나를 빠르게 복구하므로, PalServer가 다시
-준비되는 동안의 짧은 접속 중단은 남습니다.
-
-PalServer의 stdout/stderr는 Crashpad가 참조하는 다음 파일에도 복제됩니다.
-
-```text
-${PALWORLD_DATA_ROOT}/Pal/Saved/Logs/Pal.log
-```
-
-기본 64MiB에 도달하면 시작 시 `Pal.log.previous`로 한 번 회전합니다. Box64는
+Box64는
 `BOX64_SHOWBT=1`, `BOX64_SHOWSEGV=1`로 신호 시점의 네이티브·에뮬레이션
 백트레이스를 남깁니다. 전체 호출 로그와 롤링 로그는 다중 스레드 서버의 실행을
 교란하지 않도록 `BOX64_LOG=0`, `BOX64_ROLLING_LOG=0`으로 유지합니다. 실행 추적
@@ -120,13 +107,6 @@ ${PALWORLD_DATA_ROOT}/Pal/Saved/Logs/Pal.log
 무관하게 2~3분 안에 Box64 로그 포맷팅과 `clock_gettime` 경로가 겹친 SIGSEGV를
 반복했습니다. 장애 증거를 더 많이 남기려는 설정이 서버 자체를 교란할 수 있으므로
 운영 환경에서는 두 값을 다시 활성화하지 마십시오.
-
-REST 실패 시점의 Docker 상태, 최근 로그, `Pal.log`, Crashpad 미니덤프는 기본
-`./diagnostics`에 보관합니다. 서버가 다시 준비되기 전에는 작은 상태와 로그만
-기록하고, `Pal/.sentry-native/pending/*.dmp` 복사와 SHA-256 계산은 복구 후에
-진행하므로 덤프 처리가 재기동을 지연시키지 않습니다. 기본 보존 개수는 5개,
-번들당 장애 산출물 상한은 256MiB입니다. 덤프와 로그에는 플레이어 ID·IP가
-포함될 수 있으므로 이 디렉터리는 공개 저장소나 Discord에 올리지 않습니다.
 
 ## 라이브 월드 데이터 API 상태
 
@@ -173,26 +153,19 @@ Palworld 또는 Box64를 업데이트하기 전에는 월드를 저장하고 접
 
 ## 보안 기본값
 
-- Palworld와 Watchpal 모두 모든 Linux capability를 제거하고
-  `no-new-privileges`를 사용합니다.
+- Palworld는 모든 Linux capability를 제거하고 `no-new-privileges`를
+  사용합니다.
 - Palworld는 기존처럼 비루트 `steam` 사용자로 실행합니다.
-- Watchpal의 루트 파일시스템은 읽기 전용이며 `/tmp`, 상태 볼륨, 진단 경로만
-  쓰기 가능합니다.
 - 관리자 비밀번호는 Docker secret으로만 전달하고 REST/RCON은 호스트에 공개하지
   않습니다.
-- Watchpal의 Docker socket 마운트는 대상 컨테이너 재기동에 필요하지만 Docker
-  데몬 제어 권한과 동등한 고권한 경계입니다. 신뢰할 수 있는 로컬 이미지 외에는
-  이 마운트를 공유하지 않습니다.
 
 ## 확인된 범위
 
 - Apple Silicon에서 ARM64 이미지 빌드와 PalServer 실행
 - 실제 게임 클라이언트 접속과 다인 플레이
 - `8211/udp` 접속과 REST API의 저장·공지·종료 호출
-- 읽기 전용 Watchpal과 capability 제거 상태에서 Docker 상태·미니덤프 수집
-- 격리 SIGSEGV 시험에서 0.25초 안에 미니덤프 출현, 1.25초 이내 크기 안정화
 - Box64 네이티브·에뮬레이션 백트레이스 생성
-- `Pal.log` 생성·Crashpad 첨부 및 99MiB 미니덤프 진단 번들 복사
+- Docker `local` 로그 순환과 비차단 stdout/stderr 버퍼
 - 현재 바이너리의 `/game-data` 404와 비공개 활성화 후보 3종 실패 확인
 - 약 502만 회의 시간 함수 호출과 약 377만 회의 delta 비교에서 음수 delta 0건
 - 0 delta 354건을 허용한 상태에서 시간 함수와 syscall 경로 테스트 통과
