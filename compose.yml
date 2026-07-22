@@ -37,14 +37,24 @@ services:
     restart: unless-stopped
     stop_grace_period: 120s
     mem_limit: ${PALWORLD_MEMORY_LIMIT:-14g}
+    labels:
+      com.epko.watchdog.target: palworld
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     command:
       - -port=${PALWORLD_PORT:-8211}
       - -useperfthreads
       - -NoAsyncLoadingThread
       - -UseMultithreadForDS
+      - -log
     environment:
       PALWORLD_DIR: /home/steam/palworld
       PALWORLD_ADMIN_PASSWORD_FILE: /run/secrets/palworld_admin_password
+      # RCON은 기본적으로 끄고 격리 진단에서만 일시적으로 활성화한다.
+      PALWORLD_RCON_ENABLED: ${PALWORLD_RCON_ENABLED:-0}
+      PALWORLD_RCON_PORT: ${PALWORLD_RCON_PORT:-25575}
       # Palworld의 negative delta time 충돌을 줄이도록 정확성과 메모리 순서를 우선한다.
       BOX64_DYNAREC_STRONGMEM: ${BOX64_DYNAREC_STRONGMEM:-3}
       BOX64_DYNAREC_BIGBLOCK: ${BOX64_DYNAREC_BIGBLOCK:-0}
@@ -53,62 +63,40 @@ services:
       BOX64_DYNAREC_FASTNAN: ${BOX64_DYNAREC_FASTNAN:-0}
       BOX64_DYNAREC_X87DOUBLE: ${BOX64_DYNAREC_X87DOUBLE:-1}
       BOX64_SYNC_ROUNDING: ${BOX64_SYNC_ROUNDING:-1}
+      # 전체 호출 로깅은 PalServer의 다중 스레드 실행을 교란할 수 있으므로 끈다.
+      # 충돌 시점의 백트레이스와 SIGSEGV 정보만 남긴다.
+      BOX64_LOG: ${BOX64_LOG:-0}
+      BOX64_SHOWBT: ${BOX64_SHOWBT:-1}
+      BOX64_SHOWSEGV: ${BOX64_SHOWSEGV:-1}
+      BOX64_ROLLING_LOG: ${BOX64_ROLLING_LOG:-0}
       PAL_CLOCK_MODE: ${PAL_CLOCK_MODE:-box64}
       PAL_CLOCK_NTP_REQUIRED: ${PAL_CLOCK_NTP_REQUIRED:-0}
       PAL_CLOCK_NTP_SERVERS: ${PAL_CLOCK_NTP_SERVERS:-time.cloudflare.com time.google.com pool.ntp.org}
     ports:
       - "${PALWORLD_PORT:-8211}:${PALWORLD_PORT:-8211}/udp"
+    networks:
+      default: {}
+      watchdog_control:
+        aliases:
+          - palworld-api
     volumes:
       - ${PALWORLD_DATA_ROOT:-/Users/epko/steamcmd-data/palworld}:/home/steam/palworld
     secrets:
       - palworld_admin_password
-
-  watchpal:
-    image: ${WATCHDOG_IMAGE:-epko-watchdog:latest}
-    platform: linux/arm64
-    container_name: ${WATCHPAL_CONTAINER_NAME:-watchpal}
-    build:
-      context: ${WATCHDOG_BUILD_CONTEXT:-../watchdog/container}
-      dockerfile: Dockerfile
-    depends_on:
-      palworld:
-        condition: service_healthy
-    environment:
-      WATCHDOG_ADAPTER: palworld
-      WATCHDOG_WEBHOOK_URL: ${WATCHPAL_WEBHOOK_URL:-}
-      WATCHDOG_TARGET_CONTAINER: ${PALWORLD_CONTAINER_NAME:-epko-palworld}
-      WATCHDOG_CONTAINER: ${WATCHPAL_CONTAINER_NAME:-watchpal}
-      WATCHDOG_STATE_DIR: /var/lib/watchdog
-      WATCHDOG_CHECK_INTERVAL_SECONDS: ${WATCHPAL_CHECK_INTERVAL_SECONDS:-10}
-      WATCHDOG_STATUS_INTERVAL_SECONDS: ${WATCHPAL_STATUS_INTERVAL_SECONDS:-60}
-      WATCHDOG_CONSECUTIVE_SAMPLES: ${WATCHPAL_CONSECUTIVE_SAMPLES:-3}
-      WATCHDOG_RESTART_COOLDOWN_SECONDS: ${WATCHPAL_RESTART_COOLDOWN_SECONDS:-1800}
-      WATCHDOG_PUBLIC_ADDRESS: ${WATCHPAL_PUBLIC_ADDRESS:-}
-      WATCHDOG_PUBLIC_IP_LOOKUP_URL: ${WATCHPAL_PUBLIC_IP_LOOKUP_URL:-https://api.ipify.org}
-      WATCHDOG_PUBLIC_IP_REFRESH_SECONDS: ${WATCHPAL_PUBLIC_IP_REFRESH_SECONDS:-3600}
-      WATCHDOG_GAME_PORT: ${PALWORLD_PORT:-8211}
-      WATCHDOG_GAME_PROTOCOL: UDP
-      MEMORY_WARN_GIB: ${WATCHPAL_MEMORY_WARN_GIB:-11}
-      MEMORY_RECYCLE_GIB: ${WATCHPAL_MEMORY_RECYCLE_GIB:-12}
-      MEMORY_EMERGENCY_GIB: ${WATCHPAL_MEMORY_EMERGENCY_GIB:-13.5}
-      MEMORY_HARD_LIMIT_GIB: ${WATCHPAL_MEMORY_HARD_LIMIT_GIB:-14}
-      PALWORLD_API_BASE_URL: http://palworld:8212/v1/api
-      PALWORLD_API_USERNAME: ${PALWORLD_API_USERNAME:-admin}
-      PALWORLD_ADMIN_PASSWORD_FILE: /run/secrets/palworld_admin_password
-      PALWORLD_PERIODIC_SAVE_SECONDS: ${PALWORLD_PERIODIC_SAVE_SECONDS:-600}
-      PALWORLD_SHUTDOWN_WARNING_SECONDS: ${PALWORLD_SHUTDOWN_WARNING_SECONDS:-30}
-      PALWORLD_SHUTDOWN_TIMEOUT_SECONDS: ${PALWORLD_SHUTDOWN_TIMEOUT_SECONDS:-240}
-    restart: unless-stopped
-    mem_limit: ${WATCHPAL_MEMORY_LIMIT:-256m}
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - watchpal_state:/var/lib/watchdog
-    secrets:
-      - palworld_admin_password
+    logging:
+      driver: local
+      options:
+        max-size: "${PALWORLD_DOCKER_LOG_MAX_SIZE:-8m}"
+        max-file: "${PALWORLD_DOCKER_LOG_MAX_FILE:-2}"
+        compress: "false"
+        mode: "non-blocking"
+        max-buffer-size: "${PALWORLD_DOCKER_LOG_BUFFER_SIZE:-4m}"
 
 secrets:
   palworld_admin_password:
     file: ${PALWORLD_ADMIN_PASSWORD_FILE:-./secrets/palworld_admin_password}
 
-volumes:
-  watchpal_state:
+networks:
+  watchdog_control:
+    external: true
+    name: ${PALWORLD_CONTROL_NETWORK:-epko-palworld-control}
