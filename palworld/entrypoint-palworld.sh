@@ -1,5 +1,6 @@
 #!/bin/bash
 set -Eeuo pipefail
+umask 077
 
 palworld_dir="${PALWORLD_DIR:-/home/steam/palworld}"
 server_binary="${palworld_dir}/Pal/Binaries/Linux/PalServer-Linux-Shipping"
@@ -42,10 +43,50 @@ if [[ -n "$admin_password_file" ]]; then
         -e 's/RESTAPIPort=[0-9][0-9]*/RESTAPIPort=8212/' \
         "$settings_file"
     echo "[epko-palworld] 내부 REST API 활성화: 8212/tcp"
+
+    rcon_enabled="${PALWORLD_RCON_ENABLED:-0}"
+    rcon_port="${PALWORLD_RCON_PORT:-25575}"
+    if [[ ! "$rcon_port" =~ ^[0-9]+$ ]] || (( rcon_port < 1 || rcon_port > 65535 )); then
+        echo "[epko-palworld] PALWORLD_RCON_PORT는 1~65535 범위여야 합니다." >&2
+        exit 1
+    fi
+    if ! grep -q 'RCONEnabled=' "$settings_file" || ! grep -q 'RCONPort=' "$settings_file"; then
+        echo "[epko-palworld] PalWorldSettings.ini에 RCON 설정 키가 없습니다." >&2
+        exit 1
+    fi
+    case "$rcon_enabled" in
+    1)
+        sed -i \
+            -e 's/RCONEnabled=False/RCONEnabled=True/' \
+            -e "s/RCONPort=[0-9][0-9]*/RCONPort=${rcon_port}/" \
+            "$settings_file"
+        echo "[epko-palworld] 내부 진단용 RCON 활성화: ${rcon_port}/tcp"
+        ;;
+    0)
+        sed -i 's/RCONEnabled=True/RCONEnabled=False/' "$settings_file"
+        ;;
+    *)
+        echo "[epko-palworld] PALWORLD_RCON_ENABLED는 0 또는 1이어야 합니다." >&2
+        exit 1
+        ;;
+    esac
 fi
 
 # DepotDownloader와 macOS bind mount 조합에서는 실행 비트가 보존되지 않을 수 있다.
 chmod +x "$server_binary"
+mkdir -p "${palworld_dir}/Pal/Saved/Logs"
+pal_log_file="${palworld_dir}/Pal/Saved/Logs/Pal.log"
+pal_log_max_bytes="${PALWORLD_LOG_MAX_BYTES:-67108864}"
+if [[ ! "$pal_log_max_bytes" =~ ^[0-9]+$ ]] || (( pal_log_max_bytes < 1048576 )); then
+    echo "[epko-palworld] PALWORLD_LOG_MAX_BYTES는 1048576 이상의 정수여야 합니다." >&2
+    exit 1
+fi
+if [[ -f "$pal_log_file" ]] && (( $(wc -c < "$pal_log_file") >= pal_log_max_bytes )); then
+    mv -f "$pal_log_file" "${pal_log_file}.previous"
+fi
+# Shipping 빌드가 -log/-abslog만으로 Pal.log를 만들지 않는 경우에도 Crashpad 첨부와
+# Watchpal 진단에 쓸 수 있도록 stdout/stderr를 같은 파일에 복제한다.
+exec > >(tee -a "$pal_log_file") 2>&1
 if [[ -f "${palworld_dir}/Pal/Plugins/Sentry/Binaries/Linux/crashpad_handler" ]]; then
     chmod +x "${palworld_dir}/Pal/Plugins/Sentry/Binaries/Linux/crashpad_handler"
 fi

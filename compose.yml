@@ -37,14 +37,24 @@ services:
     restart: unless-stopped
     stop_grace_period: 120s
     mem_limit: ${PALWORLD_MEMORY_LIMIT:-14g}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     command:
       - -port=${PALWORLD_PORT:-8211}
       - -useperfthreads
       - -NoAsyncLoadingThread
       - -UseMultithreadForDS
+      - -log
+      - -abslog=/home/steam/palworld/Pal/Saved/Logs/Pal.log
     environment:
       PALWORLD_DIR: /home/steam/palworld
       PALWORLD_ADMIN_PASSWORD_FILE: /run/secrets/palworld_admin_password
+      PALWORLD_LOG_MAX_BYTES: ${PALWORLD_LOG_MAX_BYTES:-67108864}
+      # RCON은 기본적으로 끄고 격리 진단에서만 일시적으로 활성화한다.
+      PALWORLD_RCON_ENABLED: ${PALWORLD_RCON_ENABLED:-0}
+      PALWORLD_RCON_PORT: ${PALWORLD_RCON_PORT:-25575}
       # Palworld의 negative delta time 충돌을 줄이도록 정확성과 메모리 순서를 우선한다.
       BOX64_DYNAREC_STRONGMEM: ${BOX64_DYNAREC_STRONGMEM:-3}
       BOX64_DYNAREC_BIGBLOCK: ${BOX64_DYNAREC_BIGBLOCK:-0}
@@ -53,6 +63,12 @@ services:
       BOX64_DYNAREC_FASTNAN: ${BOX64_DYNAREC_FASTNAN:-0}
       BOX64_DYNAREC_X87DOUBLE: ${BOX64_DYNAREC_X87DOUBLE:-1}
       BOX64_SYNC_ROUNDING: ${BOX64_SYNC_ROUNDING:-1}
+      # 전체 호출 로깅은 PalServer의 다중 스레드 실행을 교란할 수 있으므로 끈다.
+      # 충돌 시점의 백트레이스와 SIGSEGV 정보만 남긴다.
+      BOX64_LOG: ${BOX64_LOG:-0}
+      BOX64_SHOWBT: ${BOX64_SHOWBT:-1}
+      BOX64_SHOWSEGV: ${BOX64_SHOWSEGV:-1}
+      BOX64_ROLLING_LOG: ${BOX64_ROLLING_LOG:-0}
       PAL_CLOCK_MODE: ${PAL_CLOCK_MODE:-box64}
       PAL_CLOCK_NTP_REQUIRED: ${PAL_CLOCK_NTP_REQUIRED:-0}
       PAL_CLOCK_NTP_SERVERS: ${PAL_CLOCK_NTP_SERVERS:-time.cloudflare.com time.google.com pool.ntp.org}
@@ -76,6 +92,7 @@ services:
     environment:
       WATCHDOG_ADAPTER: palworld
       WATCHDOG_WEBHOOK_URL: ${WATCHPAL_WEBHOOK_URL:-}
+      WATCHDOG_WEBHOOK_URL_FILE: /run/secrets/watchpal_webhook_url
       WATCHDOG_TARGET_CONTAINER: ${PALWORLD_CONTAINER_NAME:-epko-palworld}
       WATCHDOG_CONTAINER: ${WATCHPAL_CONTAINER_NAME:-watchpal}
       WATCHDOG_STATE_DIR: /var/lib/watchdog
@@ -95,20 +112,43 @@ services:
       PALWORLD_API_BASE_URL: http://palworld:8212/v1/api
       PALWORLD_API_USERNAME: ${PALWORLD_API_USERNAME:-admin}
       PALWORLD_ADMIN_PASSWORD_FILE: /run/secrets/palworld_admin_password
+      PALWORLD_API_TIMEOUT_SECONDS: ${PALWORLD_API_TIMEOUT_SECONDS:-5}
       PALWORLD_PERIODIC_SAVE_SECONDS: ${PALWORLD_PERIODIC_SAVE_SECONDS:-600}
       PALWORLD_SHUTDOWN_WARNING_SECONDS: ${PALWORLD_SHUTDOWN_WARNING_SECONDS:-30}
       PALWORLD_SHUTDOWN_TIMEOUT_SECONDS: ${PALWORLD_SHUTDOWN_TIMEOUT_SECONDS:-240}
+      PALWORLD_FORCE_RESTART_TIMEOUT_SECONDS: ${PALWORLD_FORCE_RESTART_TIMEOUT_SECONDS:-5}
+      PALWORLD_DIAGNOSTICS_ENABLED: ${PALWORLD_DIAGNOSTICS_ENABLED:-1}
+      PALWORLD_DIAGNOSTICS_DIR: /diagnostics
+      PALWORLD_DIAGNOSTICS_SOURCE: /palworld-saved
+      PALWORLD_DIAGNOSTICS_SENTRY_SOURCE: /palworld-sentry
+      PALWORLD_DIAGNOSTICS_LOG_TAIL_LINES: ${PALWORLD_DIAGNOSTICS_LOG_TAIL_LINES:-400}
+      PALWORLD_DIAGNOSTICS_RETENTION_COUNT: ${PALWORLD_DIAGNOSTICS_RETENTION_COUNT:-5}
+      PALWORLD_DIAGNOSTICS_MAX_ARTIFACT_MIB: ${PALWORLD_DIAGNOSTICS_MAX_ARTIFACT_MIB:-256}
     restart: unless-stopped
     mem_limit: ${WATCHPAL_MEMORY_LIMIT:-256m}
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - watchpal_state:/var/lib/watchdog
+      - ${PALWORLD_DATA_ROOT:-/Users/epko/steamcmd-data/palworld}/Pal/Saved:/palworld-saved:ro
+      - ${PALWORLD_DATA_ROOT:-/Users/epko/steamcmd-data/palworld}/Pal/.sentry-native:/palworld-sentry:ro
+      - ${WATCHPAL_DIAGNOSTICS_ROOT:-./diagnostics}:/diagnostics
     secrets:
       - palworld_admin_password
+      - watchpal_webhook_url
 
 secrets:
   palworld_admin_password:
     file: ${PALWORLD_ADMIN_PASSWORD_FILE:-./secrets/palworld_admin_password}
+  watchpal_webhook_url:
+    # Webhook을 쓰지 않으면 빈 .gitkeep가 마운트된다. 직접 환경 변수도 계속 지원한다.
+    file: ${WATCHPAL_WEBHOOK_SECRET_FILE:-./secrets/.gitkeep}
 
 volumes:
   watchpal_state:

@@ -4,3 +4,4 @@
 !.env.sample
 secrets/*
 !secrets/.gitkeep
+diagnostics/

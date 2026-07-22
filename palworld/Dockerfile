@@ -36,7 +36,10 @@ ENV USER=steam \
     BOX64_SYNC_ROUNDING=1 \
     PAL_CLOCK_MODE=box64 \
     PAL_CLOCK_NTP_SERVERS="time.cloudflare.com time.google.com pool.ntp.org" \
-    BOX64_LOG=0
+    BOX64_LOG=0 \
+    BOX64_SHOWBT=1 \
+    BOX64_SHOWSEGV=1 \
+    BOX64_ROLLING_LOG=0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
