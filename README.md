@@ -158,6 +158,9 @@ Palworld 또는 Box64를 업데이트하기 전에는 월드를 저장하고 접
 - Palworld는 기존처럼 비루트 `steam` 사용자로 실행합니다.
 - 관리자 비밀번호는 Docker secret으로만 전달하고 REST/RCON은 호스트에 공개하지
   않습니다.
+- Debian trixie-slim에 기본 포함되지만 PalServer 런타임에서 사용하지 않는
+  `perl-base`는 이미지 빌드 마지막 단계에서 제거합니다. Bash 엔트리포인트,
+  시간 기준 도구, Box64와 실제 PalServer 기동을 제거 후 형상에서 검증합니다.
 
 ## 확인된 범위
 

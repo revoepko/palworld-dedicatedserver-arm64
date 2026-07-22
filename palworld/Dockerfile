@@ -53,6 +53,9 @@ RUN apt-get update \
         xdg-user-dirs \
     && localedef -i en_US -c -f UTF-8 \
         -A /usr/share/locale/locale.alias en_US.UTF-8 \
+    # PalServer와 엔트리포인트는 Perl을 사용하지 않는다. Debian trixie-slim의
+    # 취약한 Essential perl-base를 런타임 이미지에서 제거해 공격 표면을 줄인다.
+    && dpkg --purge --force-remove-essential perl-base \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --home-dir "$HOME" --shell /bin/bash "$USER" \
     && mkdir -p "$PALWORLD_DIR" \
